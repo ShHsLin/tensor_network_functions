@@ -1,4 +1,8 @@
+from jax.config import config
+config.update("jax_enable_x64", True)
 import numpy as np
+import jax.numpy as jnp
+import jax
 from tensor_network_functions import circuit_func, misc
 try:
     raise
@@ -9,21 +13,71 @@ except:
 
 def init_mps(L, chi, d):
     '''
+    [left, phys, right]
+
     Return MPS in AAAAAA form, i.e. left canonical form
     such that \sum A^\dagger A = I
     '''
-    A_list = []
+    mps_list = []
     for i in range(L):
         chi1 = np.min([d**np.min([i,L-i]),chi])
         chi2 = np.min([d**np.min([i+1,L-i-1]),chi])
-        try:
-            A_list.append(circuit_func.polar(0.5 - np.random.uniform(size=[d,chi1,chi2])))
-            # A_list.append(polar(np.random.uniform(size=[d,chi1,chi2])))
-        except:
-            A_list.append(circuit_func.polar(0.5 - onp.random.uniform(size=[d,chi1,chi2])))
-            # A_list.append(polar(onp.random.uniform(size=[d,chi1,chi2])))
 
-    return A_list
+        # try:
+        #     A_list.append(circuit_func.polar(0.5 - np.random.uniform(size=[d,chi1,chi2])))
+        # except:
+        #     A_list.append(circuit_func.polar(0.5 - onp.random.uniform(size=[d,chi1,chi2])))
+
+        print("at site ", i, "mps of shape", [chi1, d, chi2])
+        # rand_tensor = 0.5 - np.random.uniform(size=[chi1, d, chi2])
+        # rand_tensor = rand_tensor + 1j * (0.5 - np.random.uniform(size=[chi1, d, chi2]))
+        # Q, R = np.linalg.qr(rand_tensor.reshape([chi1*d, chi2]))
+        rand_tensor = np.eye(chi1*d) + 0.05 * np.random.uniform(size=[chi1 * d, chi1 * d]) - 0.025
+        rand_tensor = rand_tensor + 1j * 0.05 * np.random.uniform(size=[chi1 * d, chi1 * d]) - 0.025
+        Q, R = np.linalg.qr(rand_tensor)
+        Q = Q[:, :chi2]
+        Q = jnp.array(Q, jnp.complex128)
+        mps_list.append(Q.reshape([chi1, d, chi2]))
+
+    return mps_list
+
+def get_mps_amp_jax(mps_list, config):
+    '''
+    [left, phys, right]
+
+    Goal:
+        evaluate the probability amplitude of the given configuration
+    Input:
+        mps_list: list of mps tensors
+        config: list of int
+    '''
+    mat_list = [mps_list[idx][:, mps_ind, :] for idx, mps_ind in enumerate(config)]
+
+    mat = mat_list[0]
+    for idx in range(1, len(mps_list)):
+        mat = mat.dot(mat_list[idx])
+
+    return jnp.trace(mat)
+
+def get_mps_amp_batch_jax(mps_list, config_batch):
+    '''
+    [left, phys, right]
+
+    Goal:
+        evaluate the probability amplitude of the given configuration
+    Input:
+        mps_list: list of mps tensors
+        config_batch: 2d np array of config [num_data, system_size]
+    '''
+    batch_mat_list = [jnp.take(mps_list[idx], mps_indices, axis=1)
+                      for idx, mps_indices in enumerate(config_batch.T)]
+
+    mat = batch_mat_list[0]
+    for idx in range(1, len(mps_list)):
+        mat = jnp.einsum('ibr,rbj->ibj', mat, batch_mat_list[idx])
+
+    return jnp.trace(mat, axis1=0, axis2=2)
+
 
 def plrq_2_plr(A_list):
     new_A_list = []
@@ -49,6 +103,8 @@ def plr_2_lpr(A_list):
 
 def MPS_dot_left_env(mps_up, mps_down, site_l, cache_env_list=None):
     '''
+    [left, phys, right]
+
     # Complex compatible
     Goal:
         Contract and form the left environment of site_l
@@ -83,6 +139,8 @@ def MPS_dot_left_env(mps_up, mps_down, site_l, cache_env_list=None):
 
 def MPS_dot_right_env(mps_up, mps_down, site_l, cache_env_list=None):
     '''
+    [left, phys, right]
+
     # Complex compatible
     Goal:
         Contract and form the right environment of site_l
@@ -117,25 +175,57 @@ def MPS_dot_right_env(mps_up, mps_down, site_l, cache_env_list=None):
 
     return right_env
 
-
-def MPS_dot(mps_1, mps_2):
+def overlap_lpr_jax(mps_1, mps_2):
     '''
+    [left, phys, right]
+
     # Complex compatible
     Return inner product of two MPS, with mps_1 taking complex_conjugate
     <mps_1 | mps_2 >
     '''
     L = len(mps_1)
-    mps_temp = einsum('ijk,ijl->kl', mps_1[0].conjugate(), mps_2[0])
+    # mps_temp = einsum('ijk,ijl->kl', mps_1[0].conjugate(), mps_2[0])
+    mps_temp = jnp.tensordot(mps_1[0].conjugate(), mps_2[0], [[0, 1], [0, 1]])  #right*, right
     for idx in range(1, L):
-        mps_temp = einsum('ij,ikl->jkl', mps_temp, mps_1[idx].conjugate())
-        mps_temp = einsum('ijk,ijl->kl', mps_temp, mps_2[idx])
+        mps_temp = jnp.tensordot(mps_temp, mps_2[idx], [[1], [0]])
+        # [right*, (right)] [(left), phys, right] -> [right*, phys, right]
+        mps_temp = jnp.tensordot(mps_1[idx].conjugate(), mps_temp, [[0, 1], [0, 1]])
+        #  [left*, phys*, right*] [right*, phys, right] --> [right*, right]
 
-    return mps_temp[0, 0]
+        # mps_temp = einsum('ij,ikl->jkl', mps_temp, mps_1[idx].conjugate())
+        # mps_temp = einsum('ijk,ijl->kl', mps_temp, mps_2[idx])
 
+    assert mps_temp.size == 1
+    return jnp.trace(mps_temp)
+
+def overlap_lpr(mps_1, mps_2):
+    '''
+    [left, phys, right]
+
+    # Complex compatible
+    Return inner product of two MPS, with mps_1 taking complex_conjugate
+    <mps_1 | mps_2 >
+    '''
+    L = len(mps_1)
+    # mps_temp = einsum('ijk,ijl->kl', mps_1[0].conjugate(), mps_2[0])
+    mps_temp = np.tensordot(mps_1[0].conjugate(), mps_2[0], [[0, 1], [0, 1]])  #right*, right
+    for idx in range(1, L):
+        mps_temp = np.tensordot(mps_temp, mps_2[idx], [[1], [0]])
+        # [right*, (right)] [(left), phys, right] -> [right*, phys, right]
+        mps_temp = np.tensordot(mps_1[idx].conjugate(), mps_temp, [[0, 1], [0, 1]])
+        #  [left*, phys*, right*] [right*, phys, right] --> [right*, right]
+
+        # mps_temp = einsum('ij,ikl->jkl', mps_temp, mps_1[idx].conjugate())
+        # mps_temp = einsum('ijk,ijl->kl', mps_temp, mps_2[idx])
+
+    assert mps_temp.size == 1
+    return np.trace(mps_temp)
 
 def MPS_compression_variational(mps_trial, mps_target, max_iter=30, tol=1e-4,
                                 verbose=0):
     '''
+    [left, phys, right]
+
     Variational Compression on MPS with mps_trial given.
     Input:
         mps_trial: MPS for optimization
@@ -151,12 +241,12 @@ def MPS_compression_variational(mps_trial, mps_target, max_iter=30, tol=1e-4,
     '''
     L = len(mps_trial)
     # Check normalization
-    if np.abs(MPS_dot(mps_trial, mps_trial) - 1.) > 1e-8:
-        print(('mps_comp_var not normalized', MPS_dot(mps_trial, mps_trial)))
+    if np.abs(overlap_lpr(mps_trial, mps_trial) - 1.) > 1e-8:
+        print(('mps_comp_var not normalized', overlap_lpr(mps_trial, mps_trial)))
         raise
-    elif np.abs(MPS_dot(mps_target, mps_target) - 1.) > 1e-8:
-        print(('mps_comp_var not normalized', MPS_dot(mps_target, mps_target)))
-        mps_target[-1] /= np.sqrt(MPS_dot(mps_target, mps_target))
+    elif np.abs(overlap_lpr(mps_target, mps_target) - 1.) > 1e-8:
+        print(('mps_comp_var not normalized', overlap_lpr(mps_target, mps_target)))
+        mps_target[-1] /= np.sqrt(overlap_lpr(mps_target, mps_target))
     else:
         pass
         # all normalized
@@ -268,7 +358,7 @@ def MPS_compression_variational(mps_trial, mps_target, max_iter=30, tol=1e-4,
             cache_env_list[site - 1] = None
 
         # site = 0
-        trunc_err = 1. - np.square(np.abs(MPS_dot(mps_trial, mps_target)))
+        trunc_err = 1. - np.square(np.abs(overlap_lpr(mps_trial, mps_target)))
         if verbose:
             print(('var_trunc_err = ', trunc_err))
 
@@ -281,6 +371,8 @@ def MPS_compression_variational(mps_trial, mps_target, max_iter=30, tol=1e-4,
 
 def MPS_2_state(mps):
     '''
+    [phys, left, right]
+
     Goal:
         Return the full tensor representation (vector) of the state
     Input:
@@ -296,6 +388,8 @@ def MPS_2_state(mps):
 
 def state_2_MPS(psi, L, chimax, eps=1e-15):
     '''
+    [phys, left, right]
+
     Input:
         psi: the state
         L: the system size
@@ -309,6 +403,7 @@ def state_2_MPS(psi, L, chimax, eps=1e-15):
         psi_LR = np.reshape(psi_aR, (chi_n*2, dim_R//2))
         M_n, lambda_n, psi_tilde = misc.svd(psi_LR, full_matrices=False)
 
+        # This truncate the singular values that is raltively smaller than eps.
         chimax_current = np.amin([chimax,
                                   np.sum((lambda_n / np.linalg.norm(lambda_n)) > eps)])
 
@@ -376,6 +471,8 @@ def operator_2_MPO(op, L, chimax):
 
 def overlap(psi1, psi2):
     '''
+    [phys, left, right]
+
     psi1 is not taken complex conjugate beforehand.
     psi1 : with dimension [p, l, r]
     psi2 : with dimension [p, l, r]
@@ -384,14 +481,37 @@ def overlap(psi1, psi2):
     L = len(psi1)
     for i in np.arange(L):
         N = np.tensordot(N, np.conj(psi1[i]), axes=(1,1))  # a (ap), p (lp) rp -> a, p, rp
-        N = np.tensordot(N,psi2[i], axes=([0,1],[1,0])) # (a) (p) rp, (p) (l) r -> rp r
+        N = np.tensordot(N, psi2[i], axes=([0,1],[1,0])) # (a) (p) rp, (p) (l) r -> rp r
         N = np.transpose(N, [1,0])
 
     assert N.size == 1
     N = np.trace(N)
-    return(N)
+    return N
+
+def overlap_jax(psi1, psi2):
+    '''
+    [phys, left, right]
+
+    psi1 is not taken complex conjugate beforehand.
+    psi1 : with dimension [p, l, r]
+    psi2 : with dimension [p, l, r]
+    '''
+    N = jnp.ones([1,1]) # a ap
+    L = len(psi1)
+    for i in range(L):
+        N = jnp.tensordot(N, jnp.conj(psi1[i]), axes=(1,1))  # a (ap), p (lp) rp -> a, p, rp
+        N = jnp.tensordot(N, psi2[i], axes=([0,1],[1,0])) # (a) (p) rp, (p) (l) r -> rp r
+        N = jnp.transpose(N, [1,0])
+
+    assert N.size == 1
+    N = jnp.trace(N)
+    return N
 
 def expectation_values_1_site(A_list, Op_list, check_norm=True):
+    '''
+    [phys, left, right]
+
+    '''
     if check_norm:
         assert np.isclose(overlap(A_list, A_list), 1.)
     else:
@@ -421,6 +541,10 @@ def expectation_values_1_site(A_list, Op_list, check_norm=True):
     return Op_per_site
 
 def expectation_values(A_list, H_list, check_norm=True):
+    '''
+    [phys, left, right]
+
+    '''
     if check_norm:
         assert np.isclose(np.abs(overlap(A_list, A_list)), 1.)
     else:
@@ -452,8 +576,14 @@ def expectation_values(A_list, H_list, check_norm=True):
 
 def right_canonicalize(A_list, no_trunc=False, chi=None, normalized=True):
     '''
-    Bring mps in right canonical form, assuming the input mps is in
+    [phys, left, right]
+    [left canonical form]
+
+    - Bring mps in right canonical form, assuming the input mps is in
     left canonical form already.
+    - The requirement of left canonical form is not necessary, if
+    there is no truncation.
+
 
     modification in place
     '''
@@ -496,8 +626,13 @@ def right_canonicalize(A_list, no_trunc=False, chi=None, normalized=True):
 
 def left_canonicalize(A_list, no_trunc=False, chi=None, normalized=True):
     '''
-    Bring mps in left canonical form, assuming the input mps is in
+    [phys, left, right]
+    [right canonical form]
+
+    - Bring mps in left canonical form, assuming the input mps is in
     right canonical form already.
+    - The requirement of right canonical form is not necessary, if
+    there is no truncation.
 
     modification in place
     '''
@@ -540,6 +675,8 @@ def left_canonicalize(A_list, no_trunc=False, chi=None, normalized=True):
 
 def get_entanglement(A_list):
     '''
+    [phys, left, right]
+
     Goal:
         Compute the bibpartite entanglement at each cut.
     Input:
@@ -574,6 +711,8 @@ def get_entanglement(A_list):
 
 def get_renyi_n_entanglement(A_list, n):
     '''
+    [phys, left, right]
+
     Goal:
         Compute the renyi-n entanglement at each cut.
     Input:
