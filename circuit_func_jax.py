@@ -27,9 +27,8 @@ circuit_func.py file, where U is act from the right.
 '''
 from scipy import integrate
 from scipy.linalg import expm
-import misc, os
-import sys
-import mps_func
+import sys, os
+from tensor_network_functions import mps_func, misc
 
 ## 
 ## We use jax.numpy if possible

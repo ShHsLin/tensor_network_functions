@@ -1,6 +1,5 @@
 import numpy as np
-import misc
-import circuit_func
+from tensor_network_functions import circuit_func, misc
 try:
     raise
     import tcl.tcl

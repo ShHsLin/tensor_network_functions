@@ -54,9 +54,8 @@ function modified:
 '''
 from scipy import integrate
 from scipy.linalg import expm
-import misc, os
-import sys
-import mps_func
+import os, sys
+from tensor_network_functions import mps_func, misc
 
 ## We use jax.numpy if possible
 ## or autograd.numpy
