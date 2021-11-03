@@ -48,6 +48,8 @@ function modified:
 [TODO] modify:
     the variational functions.
     var_circuit_exact : we can copy the change from circuit_func_jax.
+        ## The above function fixed now with var_gate_exact
+        ## need to double check
     var_circuit
 
 
@@ -56,20 +58,6 @@ from scipy import integrate
 from scipy.linalg import expm
 import os, sys
 from tensor_network_functions import mps_func, misc
-
-## We use jax.numpy if possible
-## or autograd.numpy
-##
-## Regarding wether choosing to use autograd or jax
-## see https://github.com/google/jax/issues/193
-
-# import autograd.numpy as np
-# from autograd import grad
-# import jax.numpy as np
-# from jax import random
-# from jax import grad, jit, vmap
-# from jax.config import config
-# config.update("jax_enable_x64", True)
 
 import numpy as np
 np.seterr(all='raise')
@@ -619,14 +607,17 @@ def var_circuit_exact(target_state, iter_state, circuit, product_state,
     for var_dep_idx in range(current_depth-1, -1, -1):
         for idx in range(L - 2, -1, -1):
             remove_gate = circuit[var_dep_idx][idx]
-            remove_gate_conj = remove_gate.reshape([4, 4]).T.conj()
-            remove_gate_conj = remove_gate_conj.reshape([2, 2, 2, 2])
+            remove_gate_conj = remove_gate.T.conj()
+            # [TODO:delete] remove_gate_conj = remove_gate.reshape([4, 4]).T.conj()
+            # [TODO:delete] remove_gate_conj = remove_gate_conj.reshape([2, 2, 2, 2])
+
             bottom_state = apply_gate_exact(bottom_state, remove_gate_conj, idx)
             # now bottom_state is state without remove_gate,
             # we can now variational finding the optimal gate to replace it.
 
             if brickwall and (var_dep_idx + idx) % 2 == 1:
-                new_gate = np.eye(4).reshape([2, 2, 2, 2])
+                # new_gate = np.eye(4).reshape([2, 2, 2, 2])
+                new_gate = np.eye(4).reshape([4, 4])
             else:
                 new_gate = var_gate_exact(top_state, idx, bottom_state)
                 # new_gate, Lp_cache, Rp_cache = var_gate_w_cache(top_mps, idx, bottom_mps, Lp_cache, Rp_cache)
@@ -635,7 +626,7 @@ def var_circuit_exact(target_state, iter_state, circuit, product_state,
             # conjugate the gate
             # <psi|U = (U^\dagger |psi>)^\dagger
             new_gate_conj = new_gate.reshape([4, 4]).T.conj()
-            new_gate_conj = new_gate_conj.reshape([2, 2, 2, 2])
+            # [TODO:remove] new_gate_conj = new_gate_conj.reshape([2, 2, 2, 2])
             # new_gate_conj = np.einsum('ijkl->klij', new_gate).conj()
 
             top_state = apply_gate_exact(top_state, new_gate_conj, idx)
@@ -659,7 +650,8 @@ def var_circuit_exact(target_state, iter_state, circuit, product_state,
             ## partial_Tr[ |\phi>, |\psi> ] = Env
 
             if brickwall and (var_dep_idx + idx) % 2 == 1:
-                new_gate = np.eye(4).reshape([2, 2, 2, 2])
+                # new_gate = np.eye(4).reshape([2, 2, 2, 2])
+                new_gate = np.eye(4).reshape([4, 4])
             else:
                 new_gate = var_gate_exact(top_state, idx, bottom_state)
 
@@ -887,12 +879,14 @@ def var_gate_exact(top_state, site, bottom_state):
     bottom_theta = np.reshape(bottom_state, [(2**site), 4, 2**(L-(site+2))])
 
     M = np.tensordot(top_theta.conj(), bottom_theta, axes=([0, 2], [0, 2]))  # [ ..., upper_p, ...], [..., lower_p, ...] --> upper_p, lower_p
-    M = M.T  # the convention is lower_p, upper_p
+
+    # [TODO:remove below] now convention upper_p, lower_p
+    # M = M.T  # if the convention is lower_p, upper_p
 
     ### For detailed explanation of the formula, see function var_gate
     U, _, Vd = misc.svd(M, full_matrices=False)
     new_gate = np.dot(U, Vd).conj()
-    new_gate = new_gate.reshape([2, 2, 2, 2])
+    # [TODO:remove] new_gate = new_gate.reshape([2, 2, 2, 2])
 
     return new_gate
 

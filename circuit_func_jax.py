@@ -40,7 +40,12 @@ from tensor_network_functions import mps_func, misc
 ## small problem size and do not want to spend time fixing
 ## function with @jit, then autograd should be fine.
 
+
+
+from jax.config import config
+config.update("jax_enable_x64", True)
 import jax.numpy as np
+
 import numpy as onp
 
 def random_2site_U(d, factor=1e-2):
@@ -231,8 +236,10 @@ def apply_gate_exact(state, gate, idx):
         state
     '''
     total_dim = state.size
-    L = np.log2(total_dim).astype(int)
+    L = int(np.log2(total_dim))
     theta = np.reshape(state, [(2**idx), 4, 2**(L-(idx+2))])
+    gate = np.reshape(gate, [4, 4])
+
     theta = np.tensordot(gate, theta, [1, 1])  ## [ij] [..., j, ...] --> [i, ..., ...]
     state = (np.transpose(theta, [1, 0, 2])).flatten()
     return state
